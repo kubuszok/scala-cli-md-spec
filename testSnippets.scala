@@ -312,10 +312,10 @@ trait Runner:
       val argsVariants =
         val constantArgs = List(Vector("--suppress-outdated-dependency-warning"))
         val scalaVersions = snippet.content.usingDirectives.collect {
-          case UsingDirective("scala", values) => values.map(version => Vector(s"--scala $version"))
+          case UsingDirective("scala", values) => values.map(version => Vector(s"--scala", version))
         }.flatten.toList
         val platforms = snippet.content.usingDirectives.collect {
-          case UsingDirective("platform", values) => values.map(platform => Vector(s"--platform $platform"))
+          case UsingDirective("platform", values) => values.map(platform => Vector("--platform", platform))
         }.flatten.toList
         for {
           constantArg <- constantArgs
@@ -323,10 +323,10 @@ trait Runner:
           platformArg <- if (platforms.nonEmpty) platforms else List(Vector.empty[String])
         } yield constantArg ++ scalaVersionArg ++ platformArg
       argsVariants.map { args =>
-        RunResult(cli, ((command +: path +: args).toSeq) *)
+        RunResult(cli, ((command +: args :+ path).toSeq) *)
       }.toList
 
-    /** Called after [[Snippet]] creation, allows adjusting its content e.g. interpolating templates or adding directoves. */
+    /** Called after [[Snippet]] creation, allows adjusting its content e.g. interpolating templates or adding directives. */
     def adjusted: Snippet
 
     /** Whether the [[Snippet]] should be: tested for succedd, errors or ignored. */
@@ -460,7 +460,7 @@ case class Suite(name: String, snippets: List[Snippet]) {
       var currentTestNo = snippetsBeforeSize
       val (failed, successfulOrIgnored) = snippets.filter(_.isTested).partitionMap { snippet =>
         currentTestNo += 1
-        val progress = "%.2f".format(currentTestNo.toDouble/allSnippetsSize.toDouble)
+        val progress = "%.2f".format(currentTestNo.toDouble/allSnippetsSize.toDouble*100)
         ln()
         import snippet.{hint, stableName}
         def previewSnippet = snippet.content match
@@ -469,8 +469,7 @@ case class Suite(name: String, snippets: List[Snippet]) {
         snippet.howToRun match
           case Runner.Strategy.ExpectSuccess(outputs) =>
             val snippetDir = snippet.save()
-            log(hl"Snippet $stableName ($hint, $currentTestNo/$allSnippetsSize) saved in $snippetDir, testing" + ":\n" + previewSnippet)
-            log(hl"Progress: $progress%")
+            log(hl"Snippet $currentTestNo/$allSnippetsSize: $stableName ($hint) saved in $snippetDir, testing" + ":\n" + previewSnippet)
             failFast:
               snippet.run().foreach { case RunResult(exitCode, out, _, _) =>
                 val sanitized =
@@ -486,12 +485,12 @@ case class Suite(name: String, snippets: List[Snippet]) {
                   fail(snippet)
                 else
                   log(green"Snippet $stableName ($hint) succeeded")
+                  log(hl"Progress: $progress%")
               }
               None
           case Runner.Strategy.ExpectErrors(errors) =>
             val snippetDir = snippet.save()
-            log(hl"Snippet $stableName ($hint, $currentTestNo/$allSnippetsSize) saved in $snippetDir, testing" + ":\n" + previewSnippet)
-            log(hl"Progress: $progress%")
+            log(hl"Snippet $currentTestNo/$allSnippetsSize: $stableName ($hint) saved in $snippetDir, testing" + ":\n" + previewSnippet)
             failFast:
               snippet.run().foreach { case RunResult(exitCode, _, err, _) =>
                 val sanitized =
@@ -513,7 +512,7 @@ case class Suite(name: String, snippets: List[Snippet]) {
               None
           case Runner.Strategy.Ignore(cause) =>
             failFast:
-              log(yellow"Snippet $stableName ($hint, $currentTestNo/$allSnippetsSize) was ignored ($cause)")
+              log(yellow"Snippet $currentTestNo/$allSnippetsSize: $stableName ($hint) was ignored ($cause)")
               log(hl"Progress: $progress%")
               Some(snippet)
       }
@@ -602,7 +601,7 @@ val testSnippetsWithRunner: Runner ?=> Unit = {
   val suites = markdowns.map { markdown =>
     Suite(markdown.name.simpleName, markdown.extractAll.map(_.adjusted).adjusted)
   }
-  val allSnippetsSize = suites.map(_.snippets.size).sum
+  val allSnippetsSize = suites.map(_.dryRun.size).sum
   var runSoFar = 0
   val (failed, succeed) = suites.map { suite =>
     val result = suite.run(allSnippetsSize, runSoFar)
