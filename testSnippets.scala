@@ -413,10 +413,16 @@ object Runner:
   */
 case class Suite(name: String, snippets: List[Snippet]) {
 
-  def run(using Runner): Suite.Result =
+  def dryRun(using Runner): List[String] =
+    snippets.collect { case snippet if snippet.isTested => snippet.stableName }
+
+  def run(allSnippetsSize: Int, snippetsBeforeSize: Int)(using Runner): Suite.Result =
     if snippets.exists(_.isTested) then {
       println(hl"$name" + ":")
+      var currentTestNo = snippetsBeforeSize
       val (failed, successfulOrIgnored) = snippets.filter(_.isTested).partitionMap { snippet =>
+        currentTestNo += 1
+        val progress = "%.2f".format(currentTestNo.toDouble/allSnippetsSize.toDouble)
         println()
         import snippet.{hint, stableName}
         def previewSnippet = snippet.content match
@@ -425,39 +431,47 @@ case class Suite(name: String, snippets: List[Snippet]) {
         snippet.howToRun match
           case Runner.Strategy.ExpectSuccess(outputs) =>
             val snippetDir = snippet.save()
-            println(hl"Snippet $stableName ($hint) saved in $snippetDir, testing" + ":\n" + previewSnippet)
+            println(hl"Snippet $stableName ($hint, $currentTestNo/$allSnippetsSize) saved in $snippetDir, testing" + ":\n" + previewSnippet)
+            println(hl"Progress: $progress%")
             val RunResult(exitCode, out, _, _) = snippet.run()
             val sanitized =
               out.replaceAll(raw"snippet\.this\.", "").replaceAll(raw"snippet\.", "").replaceAll(raw"\[error\] ", "")
             lazy val unmatched = outputs.filterNot(output => sanitized.contains(output.trim))
             if exitCode != 0 then
               println(red"Snippet $stableName ($hint) failed")
+              println(hl"Progress: $progress%")
               Left(snippet)
             else if unmatched.nonEmpty then
               println(red"Snippet $stableName ($hint) shoule have produced outputs:" + "\n" + unmatched.mkString("\n"))
+              println(hl"Progress: $progress%")
               Left(snippet)
             else
               println(green"Snippet $stableName ($hint) succeeded")
               Right(None)
           case Runner.Strategy.ExpectErrors(errors) =>
             val snippetDir = snippet.save()
-            println(hl"Snippet $stableName ($hint) saved in $snippetDir, testing" + ":\n" + previewSnippet)
+            println(hl"Snippet $stableName ($hint, $currentTestNo/$allSnippetsSize) saved in $snippetDir, testing" + ":\n" + previewSnippet)
+            println(hl"Progress: $progress%")
             val RunResult(exitCode, _, err, _) = snippet.run()
             val sanitized =
               err.replaceAll(raw"snippet\.this\.", "").replaceAll(raw"snippet\.", "").replaceAll(raw"\[error\] ", "")
             lazy val unmatched = errors.filterNot(error => sanitized.contains(error.trim))
             if exitCode == 0 then
               println(red"Snippet $stableName ($hint) should have produced error(s)")
+              println(hl"Progress: $progress%")
               Left(snippet)
             else if unmatched.nonEmpty then
               println(red"Snippet $stableName ($hint) shoule have produced errors:" + "\n" + unmatched.mkString("\n"))
               println(red"got:" + "\n" + sanitized)
+              println(hl"Progress: $progress%")
               Left(snippet)
             else
               println(green"Snippet $stableName ($hint) failed as expected")
+              println(hl"Progress: $progress%")
               Right(None)
           case Runner.Strategy.Ignore(cause) =>
-            println(yellow"Snippet $stableName ($hint) was ignored ($cause)")
+            println(yellow"Snippet $stableName ($hint, $currentTestNo/$allSnippetsSize) was ignored ($cause)")
+            println(hl"Progress: $progress%")
             Right(Some(snippet))
       }
       val ignored = successfulOrIgnored.collect { case Some(snippet) => snippet }
@@ -481,7 +495,10 @@ object Suite {
     * @param failed which snippets failed
     * @param ignored which snippets were ignored
     */
-  case class Result(suiteName: String, succeed: List[Snippet], failed: List[Snippet], ignored: List[Snippet])
+  case class Result(suiteName: String, succeed: List[Snippet], failed: List[Snippet], ignored: List[Snippet]) {
+
+    def run: List[Snippet] = succeed ++ failed ++ ignored
+  }
 }
 
 /** Config read from Array[String] provided in main.
@@ -542,11 +559,20 @@ val testSnippetsWithRunner: Runner ?=> Unit = {
   val suites = markdowns.map { markdown =>
     Suite(markdown.name.simpleName, markdown.extractAll.map(_.adjusted).adjusted)
   }
-  val (failed, succeed) = suites.map(_.run).partition(_.failed.nonEmpty)
+  val allSnippetsSize = suites.map(_.snippets.size).sum
+  var runSoFar = 0
+  val (failed, succeed) = suites.map { suite =>
+    val result = suite.run(allSnippetsSize, runSoFar)
+    runSoFar += result.run.size
+    result
+  }.partition(_.failed.nonEmpty)
   println()
   if failed.nonEmpty then {
     println(red"Failed suites:")
-    failed.foreach(r => println(red"  ${r.suiteName}"))
+    failed.foreach { r =>
+      println(red"  ${r.suiteName}")
+      r.failed.foreach(s => println(red"    ${s.stableName} (${s.hint})"))
+    }
     println(red"Fix them or add to ignored list")
     sys.exit(1)
   } else {

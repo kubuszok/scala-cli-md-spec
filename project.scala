@@ -1,6 +1,6 @@
-//> using scala 3.3.3
+//> using scala 3.3.6
 //> using jvm temurin:1.11.0.23
-//> using dep "com.monovore::decline:2.4.1"
+//> using dep "com.monovore::decline:2.5.0"
 
 //> using publish.name "scala-cli-md-spec"
 //> using publish.organization "com.kubuszok"
