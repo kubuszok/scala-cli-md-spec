@@ -71,7 +71,7 @@ object RunResult {
       case State.LeftBracket if b.toChar.isDigit => state = State.Digit
       case State.Digit if b.toChar.isDigit       => ()
       case State.Digit if b.toChar == 'm'        => state = State.NoAnsi
-      case _                                     => throw new AssertionError(s"Unexpected character: $b (${b.toChar})")
+      case _                                     => throw AssertionError(s"Unexpected character: $b (${b.toChar})")
     }
   }
 
@@ -386,7 +386,8 @@ object Runner:
     * @param filter filter passed to --test-only parameter
     */
   class Default(val docsDir: File, val tmpDir: File, val filter: Option[String]) extends Runner:
-    /** Auxilary constructor populating values from [[TestConfig]] from parsed arguments.
+
+    /** Auxilary constructor populating values from [[TestConfig.ListSnippets]] from parsed arguments.
       *
       * @param cfg config provided by parsing arguments
       */
@@ -451,8 +452,8 @@ object Runner:
   */
 case class Suite(name: String, snippets: List[Snippet]) {
 
-  def dryRun(using Runner): List[String] =
-    snippets.collect { case snippet if snippet.isTested => snippet.stableName }
+  def dryRun(using Runner): List[Snippet] =
+    snippets.collect { case snippet if snippet.isTested => snippet }
 
   def run(allSnippetsSize: Int, snippetsBeforeSize: Int)(using Runner): Suite.Result =
     if snippets.exists(_.isTested) then {
@@ -543,16 +544,17 @@ object Suite {
   }
 }
 
-/** Config read from Array[String] provided in main.
-  * 
-  * @param docsDir directory where markdown files would be sought
-  * @param tmpDir directory where snippets should be written
-  * @param filter filter passed to --test-only parameter
-  * @param extra values provided with --extra k=v parameters, can be used by users in their [[Runner]]s
-  */
+/** Config read from Array[String] provided in main. 
+   * 
+   * @param docsDir directory where markdown files would be sought
+   * @param tmpDir directory where snippets should be written
+   * @param filter filter passed to --test-only parameter
+   * @param extra values provided with --extra k=v parameters, can be used by users in their [[Runner]]s
+   */
 case class TestConfig(
     docsDir: File,
     tmpDir: File,
+    listOnly: Boolean,
     filter: Option[String],
     extra: Map[String, String]
 )
@@ -569,16 +571,18 @@ object TestConfig {
           case key :: value :: Nil => Validated.valid(key -> value)
           case _                   => Validated.invalidNel(s"Expected pair, got: $string")
       def defaultMetavar: String = "<key>=<value>"
-
+      
     (
       Opts.argument[Path](metavar = "docs"),
       Opts.argument[Path](metavar = "tmp").orNone,
+      Opts.flag(long = "list-only", short = "l", help = "List only tests matching filter").orNone.map(_.isDefined),
       Opts.option[String](long = "test-only", short = "f", help = "Run only tests matching filter").orNone,
       Opts.options[(String, String)](long = "extra", help = "").orNone
-    ).mapN { (docs, tmpOpt, filter, extras) =>
+    ).mapN { (docs, tmpOpt, listOnly, filter, extras) =>
       TestConfig(
         docsDir = docs.toFile,
         tmpDir = tmpOpt.map(_.toFile).getOrElse(Files.createTempDirectory(s"docs-snippets").toFile()),
+        listOnly = listOnly,
         filter = filter,
         extra = extras.map(_.toList.toMap).getOrElse(Map.empty)
       )
@@ -589,6 +593,25 @@ object TestConfig {
 }
 
 // program
+
+/** List snippets using [[Runner]]. */
+val listSnippetsWithRunner: Runner ?=> Unit = {
+  log(hl"Listing snippets in ${summon[Runner].docsDir}")
+  log(hl"Started reading from ${summon[Runner].docsDir.getAbsolutePath()}")
+  ln()
+  val markdowns = Markdown.readFromDir(summon[Runner].docsDir)
+  log(hl"Read files: ${markdowns.map(_.name.fileName)}")
+  ln()
+  val suites = markdowns.map { markdown =>
+    Suite(markdown.name.simpleName, markdown.extractAll.map(_.adjusted).adjusted)
+  }
+  suites.foreach { suite =>
+    log(hl"Suite: ${suite.name}")
+    suite.dryRun.foreach { snippet =>
+      log(hl"  ${snippet.stableName} (${snippet.hint})")
+    }
+  }
+}
 
 /** Run tests using [[Runner]]. */
 val testSnippetsWithRunner: Runner ?=> Unit = {
@@ -629,7 +652,9 @@ val testSnippetsWithRunner: Runner ?=> Unit = {
   */
 def testSnippets(args: Array[String])(f: TestConfig => Runner = Runner.Default(_)): Unit =
   TestConfig.parse(args) match {
-    case Right(cfg) => testSnippetsWithRunner(using f(cfg))
+    case Right(cfg) =>
+      if cfg.listOnly then listSnippetsWithRunner(using f(cfg))
+      else testSnippetsWithRunner(using f(cfg))
     case Left(help) => println(help); sys.exit(1)
   }
 
