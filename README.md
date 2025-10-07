@@ -9,9 +9,9 @@ Turn each Scala CLI snippet from your markdown documentation into a test case an
 Create `test-snippets.scala` (use at least Java 11!):
 
 ```scala
-//> using scala 3.3.3
+//> using scala 3.3.6
 //> using jvm temurin:1.11.0.23
-//> using dep "com.kubuszok::scala-cli-md-spec:0.1.1"
+//> using dep "com.kubuszok::scala-cli-md-spec:0.2.0"
 import com.kubuszok.scalaclimdspec.*
 @main def run(args: String*): Unit = testSnippets(args.toArray) { cfg =>
   new Runner.Default(cfg) // or provide your own :)
@@ -36,9 +36,9 @@ If you are not providing any modification, you can run it straight from the [Cou
 
 ```bash
 # run all tests
-coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclimdspec.testSnippets -- "$PWD/docs"
+coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclimdspec.testSnippets -- "$PWD/docs"
 # run only tests from Section in my-markdown.md
-coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclimdspec.testSnippets -- --test-only="my-markdown.md#Section*" "$PWD/docs"
+coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclimdspec.testSnippets -- --test-only="my-markdown.md#Section*" "$PWD/docs"
 ```
 
 ## Rules of the game
@@ -49,7 +49,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // will be tested
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       println("yolo")
       ```
 
@@ -63,13 +63,13 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // should pass
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       println("yolo")
       ```
 
       ```scala
       // thou shall NOT pass!
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       throw Exception("yolo")
       ```
 
@@ -78,7 +78,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // should pass
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       println("yolo")
       // expected output:
       // yolo
@@ -86,7 +86,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
       
       ```scala
       // thou shall NOT pass!
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       println("yolo")
       // expected output:
       // eee macarena!
@@ -97,7 +97,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // should pass
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       throw Exception("yolo")
       // expected error:
       // yolo
@@ -105,7 +105,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // should pass
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       summon[String]
       // expected error:
       // No given instance of type String was found
@@ -113,7 +113,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
       
       ```scala
       // thou shall NOT pass!
-      //> using scala 3.3.3
+      //> using scala 3.3.6
       println("yolo")
       // expected error:
       // yolo
@@ -144,7 +144,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // file: macro.scala - part of macro example
-      //> using scala 3.3.3
+      //> using scala 3.3.6
 
       object MyMacro:
         inline def apply[A](a: A): Unit = ${ applyImpl[A]('a) }
@@ -155,7 +155,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.1.1 -M com.kubuszok.scalaclim
 
       ```scala
       // file: macro.test.scala - part of macro example
-      //> using test.dep org.scalameta::munit::1.0.0-RC1
+      //> using test.dep org.scalameta::munit::1.2.0
 
       class MacroSpec extends munit.FunSuite {
         test("Macro(a) should do thing") {
