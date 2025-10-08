@@ -25,6 +25,11 @@ then run it with [Scala CLI](https://scala-cli.virtuslab.org/):
 scala-cli run test-snippets.scala -- "$PWD/docs"
 # run only tests from Section in my-markdown.md
 scala-cli run test-snippets.scala -- --test-only="my-markdown.md#Section*" "$PWD/docs"
+
+# "dry-run" listing all snippets - useful for checking which snippets are found and how are they called
+scala-cli run test-snippets.scala -- --list-only "$PWD/docs"
+# "dry-run" listing all snippets that match the filter - useful for checking if we typed the filter correctly
+scala-cli run test-snippets.scala -- --list-only --test-only="my-markdown.md#Section*" "$PWD/docs"
 ```
 
 To see how one can customize the code to e.g. inject variables or use the newest library version
@@ -48,8 +53,8 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
     * other snippets are considered pseudocode and are ignored
 
       ```scala
-      // will be tested
       //> using scala 3.3.6
+      // will be tested
       println("yolo")
       ```
 
@@ -62,14 +67,14 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
     * by the lack of errors we mean that Scala CLI returns `0`
 
       ```scala
-      // should pass
       //> using scala 3.3.6
+      // should pass
       println("yolo")
       ```
 
       ```scala
-      // thou shall NOT pass!
       //> using scala 3.3.6
+      // thou shall NOT pass!
       throw Exception("yolo")
       ```
 
@@ -77,16 +82,16 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
       the snippet will be expected to succeed and its standard **output** will be expected to contain the content provided in these comments
 
       ```scala
-      // should pass
       //> using scala 3.3.6
+      // should pass
       println("yolo")
       // expected output:
       // yolo
       ```
       
       ```scala
-      // thou shall NOT pass!
       //> using scala 3.3.6
+      // thou shall NOT pass!
       println("yolo")
       // expected output:
       // eee macarena!
@@ -96,16 +101,16 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
       the snippet will be expected to fail and its standard **error** will be expected to contain the content provided in these comments
 
       ```scala
-      // should pass
       //> using scala 3.3.6
+      // should pass
       throw Exception("yolo")
       // expected error:
       // yolo
       ```
 
       ```scala
-      // should pass
       //> using scala 3.3.6
+      // should pass
       summon[String]
       // expected error:
       // No given instance of type String was found
@@ -139,7 +144,8 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
       With multi-file `//> using` is not required to consider the code as a Scala CLI test. Remember that to make it work, like with normal Scala CLI app,
       there should be either _exactly one `.sc` file_ **or** only `.scala` files with _exactly one explicitly defined `main`_.
 
-    * if at least one file in a multi-file snippet has a name ending with `.test.scala`, then `scala-cli test [dirname]` will be used unstead of `scala-cli run [dirname]`
+    * if at least one file in a multi-file snippet has a name ending with `.test.scala`, contains `src/test` path, or `using scope test` directive,
+      then `scala-cli test [dirname]` will be used unstead of `scala-cli run [dirname]`
       (useful for e.g. defining macros in the compile scope and showing them in the test scope since Scala CLI is NOT multi modular and you cannot demonstrate macros in another way)
 
       ```scala
@@ -178,7 +184,9 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
       println(MyEnum.values())
       ```
 
- 4. if `--test-only` flag is used, only suites containing at least 1 matching snippet and, within them, only
+ 4. Cross-compilation e.g. `//> using scala 2.13.16 3.3.6` is supported (together with `//> using target.scala ...`).
+
+ 5. if `--test-only` flag is used, only suites containing at least 1 matching snippet and, within them, only
     the matching snippets will be run and displayed (but all markdowns still need to be read to find snippets
     and match them against the pattern!)
 
@@ -192,6 +200,9 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
     # test all snippets in my-markdown.md, in section name starting with My Section
     scala-cli run test-snippets.scala -- --test-only 'my-markdown.md#My section*' "$PWD/docs"
     ```
+  
+ 6. If `--list-only` flag is used, available snippets will be listed. Can be used with combination with `--test-only`
+    to make a "dry run", which snippets would be tested.
 
 ## Why though
 

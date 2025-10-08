@@ -135,10 +135,12 @@ object Markdown {
 
 case class UsingDirective(name: String, values: List[String])
 object UsingDirective {
-  private val pattern = raw"^\s*//>\s+using\s+([^\s]+)\s+([^\s]+)\s*$$".r
+  private val pattern = raw"^\s*//>\s+using\s+([^\s]+)\s+(.+)\s*$$".r
   
   def findAllIn(line: String): Iterator[UsingDirective] = line.linesIterator.collect {
-    case pattern(name, values) => UsingDirective(name, values.split(" ").toList)
+    case pattern(name, values) =>
+      // TODO: use something smarter, that respects quotes and other stuff
+      UsingDirective(name, values.split(raw"\s+").map(_.trim()).toList.filter(_.nonEmpty))
   }
 }
 
@@ -281,15 +283,62 @@ trait Runner:
   /** Filter passed to --test-only parameter. */
   def filter: Option[String]
 
+  /** Command to run Scala CLI. */
+  val scalaCliCommand: String = "scala-cli"
+
+  /** Always added to run/test commands. */
+  val extraScalaCliArgs: Vector[String] = Vector(
+    "--suppress-directives-in-multiple-files-warning",
+    "--suppress-experimental-feature-warning",
+    "--suppress-outdated-dependency-warning"
+  )
+
   private lazy val filterPattern = filter.map(f => Regex.quote(f).replaceAll("[*]", raw"\\E.*\\Q").replaceAll(raw"\\Q\\E", "").r)
 
   extension (snippet: Snippet)
+    /** Called after [[Snippet]] creation, allows adjusting its content e.g. interpolating templates or adding directives. */
+    def adjusted: Snippet
+
+    /** Whether the [[Snippet]] should be: tested for succedd, errors or ignored. */
+    def howToRun: Runner.Strategy
+
+    /** Extracts --scala arguments from using directives. */
+    def extractScalaVersionsArgs: List[Vector[String]] = {
+      val found = snippet.content.usingDirectives.collect {
+        case UsingDirective("scala", values) => values.map(version => Vector(s"--scala", version))
+      }.flatten.toList
+      if (found.nonEmpty) found else List(Vector.empty[String])
+    }
+
+    /** Extracts --platform arguments from using directives. */
+    def extractPlatformsArgs: List[Vector[String]] = {
+      val found = snippet.content.usingDirectives.collect {
+        case UsingDirective("platform", values) => values.map(platform => Vector("--platform", platform))
+      }.flatten.toList
+      if (found.nonEmpty) found else List(Vector.empty[String])
+    }
+
+    /** Whether the [[Snippet]] has tests. */
+    def hasTestScope: Boolean = snippet.content.fileToContentMap.keys.exists { fileName =>
+      fileName.endsWith(".test.scala") || fileName.contains("src/test/")
+    } || snippet.content.usingDirectives.exists {
+      case UsingDirective("target.scope", values) => values.contains("test")
+      case UsingDirective(s"test.${_}", values) => values.nonEmpty
+      case _ => false
+    }
+
+    /** Whether this [[Snippet]] should be run according to the --test-only filter (can still be ignored by the strategy!). */
+    def isTested: Boolean = filterPattern.forall(_.matches(snippet.stableName))
+    
+    /** Path to the snippet directory. */
+    def snippetDirFile: File = File(s"${tmpDir.getPath()}/${snippet.dirName}")
+
     /** Writes content of each file that the snippet is make of to the disc.
       * 
       * @return name of the directory .sc/.scala files were written to
       */
     def save(): File = {
-      val snippetDir = File(s"${tmpDir.getPath()}/${snippet.dirName}")
+      val snippetDir = snippetDirFile
       snippetDir.mkdirs()
       snippet.content.fileToContentMap.foreach { case (fileName, Snippet.Content.Single(content)) =>
         val file = File(s"${snippetDir.getPath()}/$fileName")
@@ -304,36 +353,15 @@ trait Runner:
       * @return the result of the Scala CLI run
       */
     def run(): List[RunResult] =
-      val cli = "scala-cli"
-      val command = snippet.content match
-        case Snippet.Content.Multiple(files) if files.keys.exists(_.endsWith(".test.scala")) =>  "test"
-        case _ => "run"
-      val path = File(s"${tmpDir.getPath()}/${snippet.dirName}").getPath()
-      val argsVariants =
-        val constantArgs = List(Vector("--suppress-outdated-dependency-warning"))
-        val scalaVersions = snippet.content.usingDirectives.collect {
-          case UsingDirective("scala", values) => values.map(version => Vector(s"--scala", version))
-        }.flatten.toList
-        val platforms = snippet.content.usingDirectives.collect {
-          case UsingDirective("platform", values) => values.map(platform => Vector("--platform", platform))
-        }.flatten.toList
-        for {
-          constantArg <- constantArgs
-          scalaVersionArg <- if (scalaVersions.nonEmpty) scalaVersions else List(Vector.empty[String])
-          platformArg <- if (platforms.nonEmpty) platforms else List(Vector.empty[String])
-        } yield constantArg ++ scalaVersionArg ++ platformArg
-      argsVariants.map { args =>
-        RunResult(cli, ((command +: args :+ path).toSeq) *)
-      }.toList
-
-    /** Called after [[Snippet]] creation, allows adjusting its content e.g. interpolating templates or adding directives. */
-    def adjusted: Snippet
-
-    /** Whether the [[Snippet]] should be: tested for succedd, errors or ignored. */
-    def howToRun: Runner.Strategy
-
-    /** Whether this [[Snippet]] should be run according to the --test-only filter (can still be ignored by the strategy!). */
-    def isTested: Boolean = filterPattern.forall(_.matches(snippet.stableName))
+      val command = if snippet.hasTestScope then "test" else "run"
+      val path = snippetDirFile.getPath()
+      val scalaVersionsArgs = extractScalaVersionsArgs
+      val platformsArgs = extractPlatformsArgs
+      val argsVariants = for {
+        scalaVersionArg <- scalaVersionsArgs
+        platformArg <- platformsArgs
+      } yield (command +: (extraScalaCliArgs ++ scalaVersionArg ++ platformArg) :+ path).toSeq
+      argsVariants.map { args => RunResult(scalaCliCommand, args*) }.toList
 
   extension (snippets: List[Snippet])
     /** Called after all [[Snippet]]s creation, allows adjusting whole suite e.g. grouping single snippets into multiple files snippets. */
@@ -484,10 +512,9 @@ case class Suite(name: String, snippets: List[Snippet]) {
                   log(red"Snippet $stableName ($hint) shoule have produced outputs:" + "\n" + unmatched.mkString("\n"))
                   log(hl"Progress: $progress%")
                   fail(snippet)
-                else
-                  log(green"Snippet $stableName ($hint) succeeded")
-                  log(hl"Progress: $progress%")
               }
+              log(green"Snippet $stableName ($hint) succeeded")
+              log(hl"Progress: $progress%")
               None
           case Runner.Strategy.ExpectErrors(errors) =>
             val snippetDir = snippet.save()
@@ -506,10 +533,9 @@ case class Suite(name: String, snippets: List[Snippet]) {
                   log(red"got:" + "\n" + sanitized)
                   log(hl"Progress: $progress%")
                   fail(snippet)
-                else
-                  log(green"Snippet $stableName ($hint) failed as expected")
-                  log(hl"Progress: $progress%")
               }
+              log(green"Snippet $stableName ($hint) failed as expected")
+              log(hl"Progress: $progress%")
               None
           case Runner.Strategy.Ignore(cause) =>
             failFast:
