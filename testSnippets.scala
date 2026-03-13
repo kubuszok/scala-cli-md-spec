@@ -282,6 +282,8 @@ trait Runner:
   def tmpDir: File
   /** Filter passed to --test-only parameter. */
   def filter: Option[String]
+  /** Whether to only compile snippets without running them. */
+  def compileOnly: Boolean = false
 
   /** Command to run Scala CLI. */
   val scalaCliCommand: String = "scala-cli"
@@ -349,7 +351,7 @@ trait Runner:
     }
 
     /** Runs Scala CLI, assumes that files were written before using [[save()]] command.
-      * 
+      *
       * @return the result of the Scala CLI run
       */
     def run(): List[RunResult] =
@@ -363,6 +365,20 @@ trait Runner:
       } yield (command +: (extraScalaCliArgs ++ scalaVersionArg ++ platformArg) :+ path).toSeq
       argsVariants.map { args => RunResult(scalaCliCommand, args*) }.toList
 
+    /** Compiles snippet with Scala CLI without running it, assumes that files were written before using [[save()]] command.
+      *
+      * @return the result of the Scala CLI compile
+      */
+    def compile(): List[RunResult] =
+      val path = snippetDirFile.getPath()
+      val scalaVersionsArgs = extractScalaVersionsArgs
+      val platformsArgs = extractPlatformsArgs
+      val argsVariants = for {
+        scalaVersionArg <- scalaVersionsArgs
+        platformArg <- platformsArgs
+      } yield ("compile" +: (extraScalaCliArgs ++ scalaVersionArg ++ platformArg) :+ path).toSeq
+      argsVariants.map { args => RunResult(scalaCliCommand, args*) }.toList
+
   extension (snippets: List[Snippet])
     /** Called after all [[Snippet]]s creation, allows adjusting whole suite e.g. grouping single snippets into multiple files snippets. */
     def adjusted: List[Snippet]
@@ -371,10 +387,13 @@ object Runner:
   enum Strategy:
     case ExpectSuccess(outputs: List[String])
     case ExpectErrors(errors: List[String])
+    case ExpectCompileErrors(errors: List[String])
+    case CompileOnly
     case Ignore(cause: String)
 
   private val outputStart = raw"\s*// expected output:\s*".r
   private val errorStart = raw"\s*// expected error:\s*".r
+  private val compileErrorStart = raw"\s*// expected compile error:\s*".r
   private val comment = raw"\s*// (.+)".r
   private def extractMsg(content: String, msgStart: Regex): List[String] = {
     enum State:
@@ -396,6 +415,7 @@ object Runner:
   }
   def extractOutputs(content: String): List[String] = extractMsg(content, outputStart)
   def extractErrors(content: String): List[String] = extractMsg(content, errorStart)
+  def extractCompileErrors(content: String): List[String] = extractMsg(content, compileErrorStart)
 
   private val multipleFileHeader = raw"\s*// file: (.+) - part of (.+)".r
 
@@ -406,20 +426,21 @@ object Runner:
     *  - aggregates snippets by "// file: [file name] - part of [example name]"
     *  - ignores snippets which do not contains a single "// using"
     *  - ignores snippets containing libraryDependencies (to not run sbt examples)
-    *  - tests for errors if there is any "// expected error:""
-    *  - othersie tests for success, testing if output contains values under "// expected output:"
+    *  - tests for compile errors if there is any "// expected compile error:"
+    *  - tests for runtime errors if there is any "// expected error:"
+    *  - otherwise tests for success, testing if output contains values under "// expected output:"
     * 
     * @param docsDir directory where markdown files would be sought
     * @param tmpDir directory where snippets should be written
     * @param filter filter passed to --test-only parameter
     */
-  class Default(val docsDir: File, val tmpDir: File, val filter: Option[String]) extends Runner:
+  class Default(val docsDir: File, val tmpDir: File, val filter: Option[String], override val compileOnly: Boolean = false) extends Runner:
 
     /** Auxilary constructor populating values from [[TestConfig.ListSnippets]] from parsed arguments.
       *
       * @param cfg config provided by parsing arguments
       */
-    def this(cfg: TestConfig) = this(cfg.docsDir, cfg.tmpDir, cfg.filter)
+    def this(cfg: TestConfig) = this(cfg.docsDir, cfg.tmpDir, cfg.filter, cfg.compileOnly)
 
     extension (snippet: Snippet)
       def adjusted: Snippet = snippet
@@ -430,6 +451,10 @@ object Runner:
           if !content.contains("//> using") && multipleFileHeader.findFirstIn(content).isEmpty then Strategy.Ignore("pseudocode")
           // for simplicity: we're assuming that only sbt examples have libraryDependencies
           else if content.contains("libraryDependencies") then Strategy.Ignore("sbt example")
+          // compile-only: verify the snippet compiles without running it
+          else if content.contains("// compile-only") then Strategy.CompileOnly
+          // expected compile error: verify the snippet fails to compile with expected errors
+          else if content.contains("// expected compile error:") then Strategy.ExpectCompileErrors(extractCompileErrors(content))
           // for simplicity: we're assuming that errors are defined in inline comments starting with '// expected error:'
           else if content.contains("// expected error:") then Strategy.ExpectErrors(extractErrors(content))
           else Strategy.ExpectSuccess(extractOutputs(content))
@@ -437,12 +462,25 @@ object Runner:
           // if there is any Ignored, then the first reason wins
           case (Strategy.Ignore(reason), _) => Strategy.Ignore(reason)
           case (_, Strategy.Ignore(reason)) => Strategy.Ignore(reason)
-          // if there is any ExpectErrors, then errors are aggregates, outputs are discarded
+          // if there is any ExpectCompileErrors, compile errors are aggregated, everything else is discarded
+          case (Strategy.ExpectCompileErrors(errors1), Strategy.ExpectCompileErrors(errors2)) => Strategy.ExpectCompileErrors(errors1 ++ errors2)
+          case (Strategy.ExpectCompileErrors(errors), _) => Strategy.ExpectCompileErrors(errors)
+          case (_, Strategy.ExpectCompileErrors(errors)) => Strategy.ExpectCompileErrors(errors)
+          // if there is any ExpectErrors, then errors are aggregated, outputs are discarded
           case (Strategy.ExpectErrors(errors1), Strategy.ExpectErrors(errors2)) => Strategy.ExpectErrors(errors1 ++ errors2)
           case (Strategy.ExpectErrors(errors), _) => Strategy.ExpectErrors(errors)
           case (_, Strategy.ExpectErrors(errors)) => Strategy.ExpectErrors(errors)
           // if all ExpectSuccess, aggregate outputs
           case (Strategy.ExpectSuccess(outputs1), Strategy.ExpectSuccess(outputs2)) => Strategy.ExpectSuccess(outputs1 ++ outputs2)
+          // CompileOnly is dominated by ExpectSuccess (already handled above), but dominates nothing
+          case (Strategy.CompileOnly, Strategy.CompileOnly) => Strategy.CompileOnly
+          case (Strategy.ExpectSuccess(outputs), Strategy.CompileOnly) => Strategy.ExpectSuccess(outputs)
+          case (Strategy.CompileOnly, Strategy.ExpectSuccess(outputs)) => Strategy.ExpectSuccess(outputs)
+        } match {
+          // when --compile-only flag is set, preserve Ignore and ExpectCompileErrors, override the rest
+          case s @ (Strategy.Ignore(_) | Strategy.ExpectCompileErrors(_)) => s
+          case _ if compileOnly => Strategy.CompileOnly
+          case other => other
         }
     extension (snippets: List[Snippet])
       def adjusted: List[Snippet] =
@@ -537,6 +575,40 @@ case class Suite(name: String, snippets: List[Snippet]) {
               log(green"Snippet $stableName ($hint) failed as expected")
               log(hl"Progress: $progress%")
               None
+          case Runner.Strategy.ExpectCompileErrors(errors) =>
+            val snippetDir = snippet.save()
+            log(hl"Snippet $currentTestNo/$allSnippetsSize: $stableName ($hint) saved in $snippetDir, testing compilation" + ":\n" + previewSnippet)
+            failFast:
+              snippet.compile().foreach { case RunResult(exitCode, _, err, _) =>
+                val sanitized =
+                  err.replaceAll(raw"snippet\.this\.", "").replaceAll(raw"snippet\.", "").replaceAll(raw"\[error\] ", "")
+                lazy val unmatched = errors.filterNot(error => sanitized.contains(error.trim))
+                if exitCode == 0 then
+                  log(red"Snippet $stableName ($hint) should have produced compile error(s)")
+                  log(hl"Progress: $progress%")
+                  fail(snippet)
+                else if unmatched.nonEmpty then
+                  log(red"Snippet $stableName ($hint) should have produced compile errors:" + "\n" + unmatched.mkString("\n"))
+                  log(red"got:" + "\n" + sanitized)
+                  log(hl"Progress: $progress%")
+                  fail(snippet)
+              }
+              log(green"Snippet $stableName ($hint) failed to compile as expected")
+              log(hl"Progress: $progress%")
+              None
+          case Runner.Strategy.CompileOnly =>
+            val snippetDir = snippet.save()
+            log(hl"Snippet $currentTestNo/$allSnippetsSize: $stableName ($hint) saved in $snippetDir, compile-only" + ":\n" + previewSnippet)
+            failFast:
+              snippet.compile().foreach { case RunResult(exitCode, _, _, _) =>
+                if exitCode != 0 then
+                  log(red"Snippet $stableName ($hint) failed to compile")
+                  log(hl"Progress: $progress%")
+                  fail(snippet)
+              }
+              log(green"Snippet $stableName ($hint) compiled successfully")
+              log(hl"Progress: $progress%")
+              None
           case Runner.Strategy.Ignore(cause) =>
             failFast:
               log(yellow"Snippet $currentTestNo/$allSnippetsSize: $stableName ($hint) was ignored ($cause)")
@@ -581,6 +653,7 @@ case class TestConfig(
     docsDir: File,
     tmpDir: File,
     listOnly: Boolean,
+    compileOnly: Boolean,
     filter: Option[String],
     extra: Map[String, String]
 )
@@ -602,13 +675,15 @@ object TestConfig {
       Opts.argument[Path](metavar = "docs"),
       Opts.argument[Path](metavar = "tmp").orNone,
       Opts.flag(long = "list-only", short = "l", help = "List only tests matching filter").orNone.map(_.isDefined),
+      Opts.flag(long = "compile-only", short = "c", help = "Only compile snippets without running them").orNone.map(_.isDefined),
       Opts.option[String](long = "test-only", short = "f", help = "Run only tests matching filter").orNone,
       Opts.options[(String, String)](long = "extra", help = "").orNone
-    ).mapN { (docs, tmpOpt, listOnly, filter, extras) =>
+    ).mapN { (docs, tmpOpt, listOnly, compileOnly, filter, extras) =>
       TestConfig(
         docsDir = docs.toFile,
         tmpDir = tmpOpt.map(_.toFile).getOrElse(Files.createTempDirectory(s"docs-snippets").toFile()),
         listOnly = listOnly,
+        compileOnly = compileOnly,
         filter = filter,
         extra = extras.map(_.toList.toMap).getOrElse(Map.empty)
       )

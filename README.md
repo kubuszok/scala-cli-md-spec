@@ -26,6 +26,11 @@ scala-cli run test-snippets.scala -- "$PWD/docs"
 # run only tests from Section in my-markdown.md
 scala-cli run test-snippets.scala -- --test-only="my-markdown.md#Section*" "$PWD/docs"
 
+# compile-only mode - verify snippets compile without running them
+scala-cli run test-snippets.scala -- --compile-only "$PWD/docs"
+# compile-only with a filter
+scala-cli run test-snippets.scala -- --compile-only --test-only="my-markdown.md#Section*" "$PWD/docs"
+
 # "dry-run" listing all snippets - useful for checking which snippets are found and how are they called
 scala-cli run test-snippets.scala -- --list-only "$PWD/docs"
 # "dry-run" listing all snippets that match the filter - useful for checking if we typed the filter correctly
@@ -98,7 +103,7 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
       ```
 
     * if there is `// expected error:` followed by inline comments in the immediate next lines,
-      the snippet will be expected to fail and its standard **error** will be expected to contain the content provided in these comments
+      the snippet will be expected to fail at **runtime** and its standard **error** will be expected to contain the content provided in these comments
 
       ```scala
       //> using scala 3.3.6
@@ -109,19 +114,22 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
       ```
 
       ```scala
-      //> using scala 3.3.6
-      // should pass
-      summon[String]
-      // expected error:
-      // No given instance of type String was found
-      ```
-      
-      ```scala
       // thou shall NOT pass!
       //> using scala 3.3.6
       println("yolo")
       // expected error:
       // yolo
+      ```
+
+    * if there is `// expected compile error:` followed by inline comments in the immediate next lines,
+      the snippet will be expected to fail at **compilation** and its compiler **error** will be expected to contain the content provided in these comments
+
+      ```scala
+      //> using scala 3.3.6
+      // should pass
+      summon[String]
+      // expected compile error:
+      // No given instance of type String was found
       ```
 
  4. by default each snippet is a standalone Scala snippet, it will be tested in a separate directory, containing a single `snippet.sc` file
@@ -201,7 +209,18 @@ coursier launch com.kubuszok:scala-cli-md-spec_3:0.2.0 -M com.kubuszok.scalaclim
     scala-cli run test-snippets.scala -- --test-only 'my-markdown.md#My section*' "$PWD/docs"
     ```
   
- 6. If `--list-only` flag is used, available snippets will be listed. Can be used with combination with `--test-only`
+ 6. If `--compile-only` flag is used, all non-ignored snippets will only be compiled (`scala-cli compile`) without
+    running or testing them. This is useful for quickly verifying that all snippets still compile without the overhead
+    of execution. Individual snippets can also be marked as compile-only with a `// compile-only` comment — handy for
+    snippets that have external dependencies (e.g. databases, APIs) or cause side effects that make them impractical to run:
+
+      ```scala
+      //> using scala 3.3.6
+      // compile-only
+      val x: Int = 42
+      ```
+
+ 7. If `--list-only` flag is used, available snippets will be listed. Can be used with combination with `--test-only`
     to make a "dry run", which snippets would be tested.
 
 ## Why though
